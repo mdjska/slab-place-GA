@@ -5,14 +5,20 @@ import random
 import math
 import copy
 import matplotlib.pyplot as plt
+from numba import jit
+
 
 def load_json(path):
+    """Load data from .json file and turn it into numpy array"""
+
     with open(path) as f:
         data = json.load(f)
     return np.asarray(data)
 
 
 def createWallGrid(Grid, Helpinggrid):
+    """Return wall code, a number between -1 and 14 telling in which direction walls are adjacent"""
+
     Wallgrid = np.empty_like(Grid)
 
     for index, _ in np.ndenumerate(Grid):
@@ -36,11 +42,14 @@ def createWallGrid(Grid, Helpinggrid):
     return Wallgrid
 
 
+@jit(nopython=True)
 def createAdditionalBeams(wallgrid, Helpinggrid):
+    """Place beams from a random corner point in a random direction."""
+
     chosenCornerPoints = []
     for index, val in np.ndenumerate(wallgrid):
         # pick a corner grid cell with 50% chance
-        if wallgrid[index[0]][index[1]] in [1, 2, 4, 8] and random.randint(0, 9) < 5:
+        if wallgrid[index[0]][index[1]] in [1, 2, 4, 8] and random.randint(0, 9) < 9:
             chosenCornerPoints.append((index, val))
             print("Placing additional beams!")
 
@@ -69,7 +78,10 @@ def createAdditionalBeams(wallgrid, Helpinggrid):
     return Helpinggrid
 
 
+@jit(nopython=True)
 def placeBeam(Helpinggrid, index, index0, index1, direction=(0, -1)):
+    """Extend the beam until it meets another wall."""
+
     point = (index[0] + index0, index[1] + index1)
     n = list(direction)
     while Helpinggrid[point[0]][point[1]] == 0:
@@ -83,12 +95,9 @@ def placeBeam(Helpinggrid, index, index0, index1, direction=(0, -1)):
     return Helpinggrid
 
 
-# wallgrid = wallInfo(grid, supportingWallGrid)
-
-# helpingGridBeams = createAdditionalBeams(wallgrid, supportingWallGrid)
-
-
 def runWallGrid(Grid, HelpingGrid, mutateBeams=True):
+    """Run wall grid with different input depending on if beams should be added or not."""
+
     if mutateBeams:
         initialHelpingGrid = HelpingGrid
         initialWallGrid = createWallGrid(Grid, initialHelpingGrid)
@@ -98,12 +107,12 @@ def runWallGrid(Grid, HelpingGrid, mutateBeams=True):
     return wallGrid
 
 
-# wallgrid = runWallGrid(grid, supportingWallGrid, mutateBeams=True)
+@jit(nopython=True)
+def rectScan(Grid, wallgrid, y, x, h, w):
+    """
+    Scan if a there is space for a given slab at a given location
+    and if it can be supported there."""
 
-
-def rectScan(
-    Grid, wallgrid, y, x, h, w
-):  # make wallgrid a parameter and add mutations in main()
     horizontalFlag = True
     verticalFlag = True
     i = y
@@ -130,7 +139,10 @@ def rectScan(
     return True
 
 
+@jit(nopython=True)
 def rectPlace(Grid, wallgrid, y, x, h, w, id):
+    """ If the scanning returned "True", place the slab. """
+
     perimeter = 0
     if rectScan(Grid, wallgrid, y, x, h, w) is True:
         perimeter = 2 * (h + w)
@@ -145,6 +157,3 @@ def rectPlace(Grid, wallgrid, y, x, h, w, id):
     else:
         pass
     return Grid, id, perimeter
-
-
-# print("--- %s seconds ---" % (time.time() - start_time))

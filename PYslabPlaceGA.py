@@ -10,25 +10,57 @@ from argparse import ArgumentParser
 import os
 import sys
 import pathlib
+import cProfile, pstats, io
 
 
-#start_time = time.time()
+def profile(fnc):
+
+    """A decorator that uses cProfile to profile a function"""
+
+    def inner(*args, **kwargs):
+
+        pr = cProfile.Profile()
+        pr.enable()
+        retval = fnc(*args, **kwargs)
+        pr.disable()
+        s = io.StringIO()
+        sortby = "cumulative"
+        ps = pstats.Stats(pr, stream=s).sort_stats(sortby)
+        ps.print_stats()
+        print(s.getvalue())
+        return retval
+
+    return inner
+
+
+start_time = time.time()
 
 parser = ArgumentParser()
-parser.add_argument('-i',"--numBestIndividuals", default=3, help="Number of top solutions to show")
-parser.add_argument('-g',"--numGenerations", default=20, help="Number of generations")
-parser.add_argument('-p',"--popSize", default=25, help="Population size")
-parser.add_argument('-b',"--mutateBeams", default=False, help="Insert additional beams as part of mutation?")
-parser.add_argument('-w',"--writeToFile", default=True, help="Write .json file with the solution grid")
-#parser.add_argument('-s',"--slabFilePath", help="File path for slab.json")
-#parser.add_argument('-t',"--gridFilePath",help="File path for grid.json")
-#parser.add_argument('-y',"--sgridFilePath",help="File path for sgrid.json")
-#parser.add_argument("-f", "--fingridFilePath", default =  "\\fingrid.json", help="File path for solution grid fingrid.json")
+parser.add_argument(
+    "-i", "--numBestIndividuals", default=3, help="Number of top solutions to show"
+)
+parser.add_argument("-g", "--numGenerations", default=20, help="Number of generations")
+parser.add_argument("-p", "--popSize", default=25, help="Population size")
+parser.add_argument("-l", "--loops", default=2000, help="Number of chromosome loops")
+parser.add_argument("-m", "--mutationProb", default=10, help="mutation probability")
+parser.add_argument(
+    "-b",
+    "--mutateBeams",
+    default=False,
+    help="Insert additional beams as part of mutation?",
+)
+parser.add_argument(
+    "-w", "--writeToFile", default=True, help="Write .json file with the solution grid"
+)
 
 args = parser.parse_args()
 
 
+@jit(nopython=True)
 def createNewChromosome(Grid, slabs, loops=1000):
+    """Create number of random placements of random slabs to try.
+    Collection of placement and slab is called a chromosome."""
+
     id = 2
     chromosome = []
     for i in range(0, loops):
@@ -40,19 +72,16 @@ def createNewChromosome(Grid, slabs, loops=1000):
     return chromosome
 
 
-def runChromosome(Grid, wallgrid, slabs, rotate=True, loops=1000):
+def runChromosome(Grid, wallgrid, slabs, loops=1000):
+    """ Try placing the chromosome genes by running rectPlace. """
+
     solutionGrid = []
-    if rotate:
-        a = []
-        for i in slabs.tolist():
-            a.append(i)
-            a.append(i[::-1])
-        slabs = a
+
     chromosome = createNewChromosome(Grid, slabs, loops)
 
     id = 2
     perimeterComb = 0
-    outgrid = copy.deepcopy(Grid)
+    outgrid = Grid.copy()
     for gene in chromosome:
         solutionGrid, id, perimeter = rectPlace(
             outgrid,
@@ -68,12 +97,15 @@ def runChromosome(Grid, wallgrid, slabs, rotate=True, loops=1000):
 
 
 def fitness(solutionGrid, perimeter):
+    """Calculate the fitness score for each individual."""
+
     emptyGridCellAfter = np.count_nonzero(solutionGrid == 0)
     score = 1 / (perimeter + (emptyGridCellAfter ** 2))
     return score
 
 
 def createInitialPopulation(Grid, wallgrid, slabs, popSize, loops=1000):
+    """Create initial population of solutions. """
 
     population = []
     perimeters = []
@@ -86,6 +118,8 @@ def createInitialPopulation(Grid, wallgrid, slabs, popSize, loops=1000):
 
 
 def scorePopulation(population, perimeters):
+    """Get the scores of all solutions (individuals) in a population. """
+
     scores = []
     for i, solutionGrid in enumerate(population):
         scores.append(fitness(solutionGrid, perimeters[i]))
@@ -93,11 +127,15 @@ def scorePopulation(population, perimeters):
 
 
 def selectParents(population, scores):
+    """Choose 4 parents from the population with probability equal to it's fitness score. """
+
     parentIndex = random.choices(population=range(len(population)), weights=scores, k=4)
     return parentIndex
 
 
 def keepElistes(population, scores, numElistes=2):
+    """Keep the two best solutions to next generation without change. """
+
     eliteIndex = np.argpartition(scores, -numElistes)[-numElistes:]
     elites = [population[i] for i in eliteIndex]
     return elites, eliteIndex
@@ -105,41 +143,41 @@ def keepElistes(population, scores, numElistes=2):
 
 # in main, make population[parent] to parentA, B, C, D etc
 def crossover(parentA, parentB, parentAindex, perimeters, wallgrid):
+    """Mate two parents by trying to combine them, and chosing parentA
+    if there is overlap."""
+
     parentBchromosome = readSolutionGrid(parentB)
     child = np.empty_like(parentA)
-
     try:
         id = np.amax(parentA) + 1
-    except:
-        print("ERROR")
+    except Exception:
+        print(Exception)
+        input()
         return parentA, perimeters[parentAindex]
     perimeterComb = perimeters[parentAindex]  # perimeter of parentA
-    parentACopy = copy.deepcopy(parentA)
-    if not parentBchromosome:
+    parentACopy = parentA.copy()
+    if parentBchromosome.size == 0:
         return parentA, perimeters[parentAindex]
     for gene in parentBchromosome:
         child, id, perimeter = rectPlace(
             parentACopy,
             wallgrid,
-            gene[0],
-            gene[1],
-            gene[2],
-            gene[3],
+            int(gene[0]),
+            int(gene[1]),
+            int(gene[2]),
+            int(gene[3]),
             id,
         )
         perimeterComb += perimeter
-    # plt.imshow(child, interpolation="none")
-    # plt.show()
-    # fig, axs = plt.subplots(ncols=3)
-    # axs[0].imshow(parentA, interpolation="none")
-    # axs[1].imshow(parentB, interpolation="none")
-    # axs[2].imshow(child, interpolation="none")
-    # plt.show()
+
     return child, perimeterComb
 
 
+# @jit(nopython = True)
 def readSolutionGrid(parent):
-    chromosome = []
+    """Return a chromosome given a solution grid. """
+
+    chromosome = np.empty((0, 4))
     i = 2
     while True:
         if i not in parent:
@@ -148,40 +186,44 @@ def readSolutionGrid(parent):
         h = max(slabCoor[0]) - min(slabCoor[0]) + 1
         w = max(slabCoor[1]) - min(slabCoor[1]) + 1
         y, x = (slabCoor[0][0], slabCoor[1][0])
-        chromosome.append([y, x, h, w])
+        params = np.array([[y, x, h, w]])
+        chromosome = np.append(chromosome, params, axis=0)
         i += 1
     return chromosome
 
 
-def mate(population, parents, perimeters, wallgrid):
-    print("Mating parents")
+def mate(population, parents, perimeters, Grid, wallgrid, mutationProb):
+    """Combine parents with eachother and mate them, adding a possibility to mutate.
+    Return children solutions."""
+
     children = []
     childrenPerimeter = []
     for parent in itertools.combinations(parents, 2):
-        try:
-            child, childPerimeter = crossover(
-                population[parent[0]],
-                population[parent[1]],
-                parents[0],
-                perimeters,
-                wallgrid,
-            )
-            children.append(child)
-            childrenPerimeter.append(childPerimeter)
-        except:
-            print(population)
-            print(population[parent[0]], population[parent[1]])
+        childTemp, childPerimeterTemp = crossover(
+            population[parent[0]],
+            population[parent[1]],
+            parents[0],
+            perimeters,
+            wallgrid,
+        )
+        child, childPerimeter = mutate(
+            childTemp, childPerimeterTemp, Grid, wallgrid, mutationProb, numGenes=2
+        )
+        children.append(child)
+        childrenPerimeter.append(childPerimeter)
+
     return children, childrenPerimeter
 
 
 def mutateChildGenes(child, numGenes=2):
+    """Mutate by shifting arbitrary slab in arbitrary direction. """
+
     childChromosome = readSolutionGrid(child)
-    mutatedChildChromosome = copy.deepcopy(childChromosome)
+    mutatedChildChromosome = childChromosome.copy()
     # number of slabs to mutate shouldn't be larger than number of slabs
     minNum = min(len(childChromosome), numGenes)
     geneToMutateIndexes = random.sample(range(len(childChromosome)), k=minNum)
 
-    # mutate by shifting arbitrary slab in arbitrary direction
     for gene in geneToMutateIndexes:
         geneToMutate = mutatedChildChromosome[gene]
         geneSwitch = random.choice(
@@ -192,13 +234,13 @@ def mutateChildGenes(child, numGenes=2):
     return mutatedChildChromosome
 
 
-def mutate(children, Grid, wallgrid, mutationProb=100, numGenes=2):
+def mutate(child, childPerimeter, Grid, wallgrid, mutationProb, numGenes=2):
+    """With a mutation probability, try to mutate a solution, scan to see
+    if the solution is valid and then create it by placing the slab."""
+
     mutatedChild = []
     perimeterComb = 0
-
-    print("Mutating child")
     if random.randint(0, 100) < mutationProb:
-        child = random.choice(children)
         # Initial Mutation
         mutatedChildChromosome = mutateChildGenes(child, numGenes)
         tempGrid = copy.deepcopy(Grid)
@@ -211,13 +253,10 @@ def mutate(children, Grid, wallgrid, mutationProb=100, numGenes=2):
             if restart:
                 mutatedChildChromosome = mutateChildGenes(child, numGenes)
                 counter += 1
-                #print(counter)
                 if counter == 100:
                     print("Mutation didn't succeed")
-                    # plt.imshow(wallgrid, interpolation="none")
-                    # plt.show()
 
-                    return child, perimeterComb
+                    return child, childPerimeter
                 restart = False
 
             for gene in mutatedChildChromosome:
@@ -225,10 +264,10 @@ def mutate(children, Grid, wallgrid, mutationProb=100, numGenes=2):
                     rectScan(
                         tempGrid,
                         wallgrid,
-                        gene[0],
-                        gene[1],
-                        gene[2],
-                        gene[3],
+                        int(gene[0]),
+                        int(gene[1]),
+                        int(gene[2]),
+                        int(gene[3]),
                     )
                     is True
                 ):
@@ -243,10 +282,17 @@ def mutate(children, Grid, wallgrid, mutationProb=100, numGenes=2):
 
         for gene in mutatedChildChromosome:
             mutatedChild, id, perimeter = rectPlace(
-                tempGrid, wallgrid, gene[0], gene[1], gene[2], gene[3], id
+                tempGrid,
+                wallgrid,
+                int(gene[0]),
+                int(gene[1]),
+                int(gene[2]),
+                int(gene[3]),
+                id,
             )
             perimeterComb += perimeter
-    "mutating Child done"
+    else:
+        return child, childPerimeter
     return mutatedChild, perimeterComb
 
 
@@ -255,26 +301,21 @@ def createPopulation(
     eliteIndex,
     children,
     childrenPerimeter,
-    mutatedChild,
-    mutatedChildPerimeter,
     perimeters,
-    scores,
-    currentPopulation,
     Grid,
     wallgrid,
     slabs,
     popSize,
-    mutateBeams,
-    loops=1500,
+    loops,
 ):
-    "Creating new population!"
+    """Create a new population. Fill the spots remaining after children and elites,
+    by random solutions."""
+
     newPopulationPerimeters = []
     elitesPerimeters = [perimeters[i] for i in eliteIndex]
     newPopulation = list(itertools.chain(elites, children))
-    newPopulation.append(mutatedChild)
 
     newPopulationPerimeters.extend(elitesPerimeters + childrenPerimeter)
-    newPopulationPerimeters.append(mutatedChildPerimeter)
 
     while len(newPopulation) < popSize:
         solutionGrid, perimeterComb = runChromosome(Grid, wallgrid, slabs, loops)
@@ -284,21 +325,36 @@ def createPopulation(
     return newPopulation, newPopulationPerimeters
 
 
-def main(numBestIndividuals, numGenerations, popSize, mutateBeams=False, writeToFile=False, writePath = "\\fingrid.json"):
+# @profile
+def main(
+    numBestIndividuals,
+    numGenerations,
+    popSize,
+    loops,
+    mutationProb,
+    mutateBeams=False,
+    writeToFile=False,
+    writePath="\\fingrid.json",
+):
+    """Main run mechanism. Initiate first population, loop over generations,
+    plot the best individuals and write the result to a .json file."""
 
     # Initial Run
     wallgrid = runWallGrid(grid, supportingWallGrid, mutateBeams=False)
     if mutateBeams:
         wallgrid = runWallGrid(grid, supportingWallGrid, mutateBeams=True)
+
+    rotate = True
+    if rotate:
+        shape = np.shape(slabsSingle)[0] * 2
+        slabs = np.empty((shape, 2))
+        slabs[::2] = slabsSingle
+        slabs[1::2] = np.fliplr(slabsSingle)
+
     population, perimeters = createInitialPopulation(grid, wallgrid, slabs, 20)
 
-    #plt.imshow(wallgrid, interpolation="none")
-    #plt.show()
-    #plt.imshow(grid, interpolation="none")
-    #plt.show()
     # GENERATIONS
     for i in range(numGenerations):
-
         print("GENERATION: ", i)
         try:
             scores = scorePopulation(population, perimeters)
@@ -309,10 +365,8 @@ def main(numBestIndividuals, numGenerations, popSize, mutateBeams=False, writeTo
 
         elites, eliteIndex = keepElistes(population, scores)
 
-        children, childrenPerimeter = mate(population, parents, perimeters, wallgrid)
-
-        mutatedChild, mutatedChildPerimeter = mutate(
-            children, grid, wallgrid, mutationProb=100
+        children, childrenPerimeter = mate(
+            population, parents, perimeters, grid, wallgrid, mutationProb
         )
 
         newPopulation, newPerimeters = createPopulation(
@@ -320,17 +374,12 @@ def main(numBestIndividuals, numGenerations, popSize, mutateBeams=False, writeTo
             eliteIndex,
             children,
             childrenPerimeter,
-            mutatedChild,
-            mutatedChildPerimeter,
             perimeters,
-            scores,
-            population,
             grid,
             wallgrid,
             slabs,
             popSize,
-            mutateBeams=True,
-            loops=2000,
+            loops,
         )
 
         population = copy.deepcopy(newPopulation)
@@ -339,7 +388,7 @@ def main(numBestIndividuals, numGenerations, popSize, mutateBeams=False, writeTo
 
     print("#########THE BEST INDIVIADUALS")
 
-    ### PLOT
+    ### PLOT - ONLY IF RUNNING OUTSIDE GRASSHOPPER
     bestIndex = np.argpartition(scores, -numBestIndividuals)[-numBestIndividuals:]
     bestIndividuals = [population[i] for i in bestIndex]
     for best in bestIndex:
@@ -352,48 +401,58 @@ def main(numBestIndividuals, numGenerations, popSize, mutateBeams=False, writeTo
             "new_map", colors, N=256
         )
         fig, axs = plt.subplots(ncols=2)
-        #axs[0].imshow(wallgrid, interpolation="none")
-        #axs[1].imshow(population[best], interpolation="none")
-        #plt.show()
-    
-    # WRITE TO FILE
+        # axs[0].imshow(wallgrid, interpolation="none")
+        # axs[1].imshow(population[best], interpolation="none")
+        # plt.show()
+
+    # WRITE BEST RESULT TO FILE
     print(bestIndividuals[0])
     if writeToFile:
 
         path_ = pathlib.Path(__file__).parent.absolute()
-        writePath = str(path_) + '\\fingrid.json'
+        writePath = str(path_) + "\\fingrid.json"
         print("path: ", writePath)
-        with open(writePath,'w') as myfile:
-            json.dump(bestIndividuals[0].tolist(),myfile)
+        with open(writePath, "w") as myfile:
+            json.dump(bestIndividuals[0].tolist(), myfile)
         print("File written")
-        #if writeToFile:
 
     return "Fin"
 
 
-#main(numBestIndividuals=3, numGenerations=20, popSize=20, mutateBeams= False, writeToFile =True, writePath = r"C:\Users\marti\Documents\CN3 specialprojekt\RevitTests\TestfingridRevit.json")
+# IF RUNNING OUTSIDE GRASSHOPPER
+# main(numBestIndividuals=3, numGenerations=20, popSize=20, mutateBeams= False, writeToFile =True, writePath = r"C:\Users\marti\Documents\CN3 specialprojekt\RevitTests\TestfingridRevit.json")
 
 
 if __name__ == "__main__":
+    """Argument parser solution for running from Grasshopper (through command-line tool) """
+
     path_ = pathlib.Path(__file__).parent.absolute()
-    writePath = str(path_) + '\\fingrid.json'
-    slabs = load_json(str(path_) + '\\slabsRevit.json')
-    grid = load_json(str(path_) + '\\gridRevit.json')
-    sgrid = load_json(str(path_) + '\\sgridRevit.json')
-    
+    writePath = str(path_) + "\\fingrid.json"
+    slabsSingle = load_json(str(path_) + "\\slabsRevit.json")
+    grid = load_json(str(path_) + "\\gridRevit.json")
+    sgrid = load_json(str(path_) + "\\sgridRevit.json")
 
     emptygrid = grid.copy()
     sgrid[sgrid == 0] = -1
     sgrid[sgrid == 2] = 0
-    supportingWallGrid = np.flip(sgrid, axis = 0)
-    grid = np.flip(grid, axis = 0)
+    supportingWallGrid = np.flip(sgrid, axis=0)
+    grid = np.flip(grid, axis=0)
 
-    #try:
-        #main(numBestIndividuals=int(args.numBestIndividuals), numGenerations=int(args.numGenerations), popSize=int(args.popSize), mutateBeams=bool(args.mutateBeams), writeToFile = bool(args.writeToFile), writePath = str(args.fingridFilePath))
-    main(numBestIndividuals=int(args.numBestIndividuals), numGenerations=int(args.numGenerations), popSize=int((args.popSize)), mutateBeams=bool(args.mutateBeams), writeToFile = bool(args.writeToFile))
-     
-    #except:
-    #    print("Something went wrong")
-    
+    try:
+        # main(numBestIndividuals=int(args.numBestIndividuals), numGenerations=int(args.numGenerations), popSize=int(args.popSize), mutateBeams=bool(args.mutateBeams), writeToFile = bool(args.writeToFile), writePath = str(args.fingridFilePath))
+        main(
+            numBestIndividuals=int(args.numBestIndividuals),
+            numGenerations=int(args.numGenerations),
+            popSize=int((args.popSize)),
+            loops=int((args.loops)),
+            mutationProb=int((args.mutationProb)),
+            mutateBeams=bool(int(args.mutateBeams)),
+            writeToFile=bool(int(args.writeToFile)),
+        )
 
-#print("--- GA: %s seconds ---" % (time.time() - start_time))
+    except Exception as e:
+        print(e)
+        input()
+
+
+print("--- GA: %s seconds ---" % (time.time() - start_time))
